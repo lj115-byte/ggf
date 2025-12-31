@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- 微信浏览器适配 -->
+    <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=0">
+    <title>幸运大转盘 - 微信专属抽奖</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 可选：引入微信JS-SDK（如需获取openid等信息） -->
+    <!-- <script src="https://res.wx.qq.com/open/js/jweixin-1.6.0.js"></script> -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        prize1: '#FF6B6B',   // 一等奖
+                        prize2: '#FF9F43',   // 二等奖
+                        prize3: '#FFD166',   // 三等奖
+                        prize4: '#06D6A0',   // 四等奖
+                        prize5: '#118AB2',   // 五等奖
+                        prize6: '#073B4C',   // 六等奖
+                        accent: '#FFD166',   // 抽奖按钮
+                    },
+                    fontFamily: {
+                        sans: ['PingFang SC', 'Microsoft YaHei', 'sans-serif'], // 适配微信字体
+                    },
+                }
+            }
+        }
+    </script>
+    <style type="text/tailwindcss">
+        @layer utilities {
+            .content-auto {
+                content-visibility: auto;
+            }
+            /* 旋转动画：微信浏览器适配 */
+            .wheel-spin {
+                transition: transform 5s cubic-bezier(0.19, 1, 0.22, 1) !important;
+                transform-origin: center center !important;
+            }
+            /* 精准指针 */
+            .precision-pointer {
+                width: 3px;
+                height: calc(50% - 45px);
+                background: #FF6B6B;
+                position: absolute;
+                top: 45px;
+                left: 50%;
+                transform: translateX(-50%);
+                z-index: 10;
+                pointer-events: none;
+            }
+            .precision-pointer::after {
+                content: '';
+                position: absolute;
+                top: -6px;
+                left: 50%;
+                transform: translateX(-50%);
+                width: 10px;
+                height: 10px;
+                background: white;
+                border: 2px solid #FF6B6B;
+                border-radius: 50%;
+                box-shadow: 0 0 0 1px #FF6B6B;
+            }
+            /* 禁用按钮样式 */
+            .btn-disabled {
+                background-color: #cccccc !important;
+                cursor: not-allowed !important;
+                transform: scale(1) !important;
+            }
+            /* 微信适配：去除滚动条 */
+            body {
+                overflow-x: hidden;
+                -webkit-overflow-scrolling: touch;
+            }
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen font-sans">
+    <div class="container mx-auto px-4 py-6 max-w-lg"> <!-- 适配微信窄屏 -->
+        <header class="text-center mb-6">
+            <h1 class="text-[clamp(1.5rem,5vw,2.5rem)] font-bold text-gray-800 mb-2">幸运大转盘</h1>
+            <p class="text-gray-600 text-sm">每人仅限抽奖1次，祝您中奖！</p>
+        </header>
+
+        <main class="flex flex-col gap-8 items-center">
+            <!-- 转盘区域（适配手机尺寸） -->
+            <div class="relative w-full max-w-[280px] flex justify-center">
+                <div id="wheel-container" class="w-[280px] h-[280px] rounded-full overflow-hidden shadow-xl">
+                    <svg id="wheel-svg" class="wheel-spin w-full h-full" viewBox="0 0 280 280"></svg>
+                </div>
+                <div class="precision-pointer"></div>
+                <!-- 抽奖按钮（适配手机点击） -->
+                <button id="spin-btn" class="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-16 h-16 rounded-full bg-accent text-gray-800 font-bold text-base shadow-lg hover:scale-105 active:scale-95 transition-transform z-20 focus:outline-none">
+                    抽奖
+                </button>
+            </div>
+
+            <!-- 结果显示区（突出显示） -->
+            <div id="result-area" class="w-full p-4 bg-white rounded-xl shadow-md min-h-[80px] flex items-center justify-center text-center">
+                <span class="text-gray-500 text-sm">点击上方按钮开始抽奖</span>
+            </div>
+
+            <!-- 管理员可隐藏概率面板：如需用户不可见，删除以下代码块 -->
+            <div class="w-full bg-white rounded-xl shadow-lg p-4">
+                <h2 class="text-lg font-bold text-gray-800 mb-4">概率设置</h2>
+                <div id="prob-controls" class="space-y-4"></div>
+                <div class="mt-4 p-2 bg-gray-50 rounded-lg flex justify-between items-center">
+                    <span class="text-gray-600 text-sm font-medium">总概率：</span>
+                    <span id="total-prob" class="font-bold text-prize1">100%</span>
+                </div>
+            </div>
+        </main>
+
+        <footer class="mt-8 text-center text-gray-500 text-xs">
+            <p>© 2025 抽奖活动 | 每人限抽1次</p>
+        </footer>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            // ===================== 核心配置 =====================
+            // 1. 奖项配置（管理员可调整概率）
+            const PRIZE_CONFIG = [
+                { id: 1, name: '一等奖', color: '#FF6B6B', probability: 5 },   // 0°-60°
+                { id: 2, name: '二等奖', color: '#FF9F43', probability: 10 },  // 60°-120°
+                { id: 6, name: '六等奖', color: '#073B4C', probability: 25 },  // 120°-180°
+                { id: 5, name: '五等奖', color: '#118AB2', probability: 25 },  // 180°-240°
+                { id: 4, name: '四等奖', color: '#06D6A0', probability: 20 },  // 240°-300°
+                { id: 3, name: '三等奖', color: '#FFD166', probability: 15 }   // 300°-360°
+            ];
+            const SLICE_ANGLE = 60;       // 每个扇区60度
+            const WHEEL_RADIUS = 140;     // 转盘半径（适配手机）
+            const SPIN_DURATION = 5000;   // 旋转时长
+
+            // 2. 单次抽奖限制（微信场景优化）
+            const LOTTERY_ID = 'wechat_lottery_2025'; // 管理员自定义活动ID
+            const STORAGE_KEY = `lottery_${LOTTERY_ID}_drawn`; // 存储键
+            const DEVICE_ID = getDeviceId(); // 获取设备唯一标识（适配微信）
+
+            // ===================== DOM元素 =====================
+            const wheelSvg = document.getElementById('wheel-svg');
+            const spinBtn = document.getElementById('spin-btn');
+            const probControls = document.getElementById('prob-controls');
+            const totalProbEl = document.getElementById('total-prob');
+            const resultArea = document.getElementById('result-area');
+
+            let isSpinning = false;       // 旋转中
+            let currentRotation = 0;      // 当前角度
+            let hasDrawn = checkHasDrawn(); // 检查是否已抽奖
+
+            // ===================== 核心：微信场景单次抽奖限制 =====================
+            /**
+             * 获取设备唯一标识（适配微信，防清除缓存）
+             * 优先级：微信openid > 设备指纹 > 本地随机ID
+             */
+            function getDeviceId() {
+                // 1. 先查本地是否有设备ID
+                let deviceId = localStorage.getItem('lottery_device_id');
+                if (deviceId) return deviceId;
+                
+                // 2. 生成设备指纹（基于浏览器信息）
+                const fingerprint = [
+                    navigator.userAgent,
+                    screen.width + 'x' + screen.height,
+                    new Date().getTimezoneOffset(),
+                    navigator.language
+                ].join('|');
+                
+                // 3. 生成唯一ID
+                deviceId = 'dev_' + btoa(fingerprint).substring(0, 20);
+                localStorage.setItem('lottery_device_id', deviceId);
+                return deviceId;
+            }
+
+            /**
+             * 检查是否已抽奖（设备ID+活动ID双重验证）
+             */
+            function checkHasDrawn() {
+                try {
+                    // 读取抽奖记录：格式 {设备ID: 抽奖状态/结果}
+                    const drawRecords = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+                    return drawRecords[DEVICE_ID] === true;
+                } catch (e) {
+                    return false;
+                }
+            }
+
+            /**
+             * 标记抽奖完成（永久记录）
+             */
+            function markDrawCompleted() {
+                try {
+                    const drawRecords = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+                    drawRecords[DEVICE_ID] = true; // 标记该设备已抽奖
+                    localStorage.setItem(STORAGE_KEY, JSON.stringify(drawRecords));
+                    hasDrawn = true;
+                } catch (e) {
+                    // 降级：直接存储
+                    localStorage.setItem(`${STORAGE_KEY}_${DEVICE_ID}`, 'true');
+                    hasDrawn = true;
+                }
+            }
+
+            /**
+             * 禁用抽奖按钮（微信样式适配）
+             */
+            function disableSpinButton(tip) {
+                spinBtn.disabled = true;
+                spinBtn.textContent = '已抽奖';
+                spinBtn.classList.add('btn-disabled', 'opacity-70');
+                showResult(tip, 'text-gray-600 text-base');
+            }
+
+            // ===================== 转盘渲染（适配手机） =====================
+            function renderWheel() {
+                wheelSvg.innerHTML = '';
+                
+                PRIZE_CONFIG.forEach((prize, index) => {
+                    const startAngle = index * SLICE_ANGLE;
+                    const endAngle = (index + 1) * SLICE_ANGLE;
+                    
+                    // 角度转弧度（适配SVG坐标系）
+                    const startRad = (startAngle - 90) * Math.PI / 180;
+                    const endRad = (endAngle - 90) * Math.PI / 180;
+                    
+                    // 计算扇形路径
+                    const startX = WHEEL_RADIUS + WHEEL_RADIUS * Math.cos(startRad);
+                    const startY = WHEEL_RADIUS + WHEEL_RADIUS * Math.sin(startRad);
+                    const endX = WHEEL_RADIUS + WHEEL_RADIUS * Math.cos(endRad);
+                    const endY = WHEEL_RADIUS + WHEEL_RADIUS * Math.sin(endRad);
+                    
+                    // 创建扇形
+                    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                    path.setAttribute('d', `M ${WHEEL_RADIUS} ${WHEEL_RADIUS} L ${startX} ${startY} A ${WHEEL_RADIUS} ${WHEEL_RADIUS} 0 0 1 ${endX} ${endY} Z`);
+                    path.setAttribute('fill', prize.color);
+                    wheelSvg.appendChild(path);
+                    
+                    // 绘制奖项文字（适配手机尺寸）
+                    const centerAngle = startAngle + SLICE_ANGLE / 2;
+                    const centerRad = (centerAngle - 90) * Math.PI / 180;
+                    const textX = WHEEL_RADIUS + (WHEEL_RADIUS * 0.5) * Math.cos(centerRad);
+                    const textY = WHEEL_RADIUS + (WHEEL_RADIUS * 0.5) * Math.sin(centerRad);
+                    
+                    const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    text.setAttribute('x', textX);
+                    text.setAttribute('y', textY);
+                    text.setAttribute('text-anchor', 'middle');
+                    text.setAttribute('dominant-baseline', 'middle');
+                    text.setAttribute('font-size', '14');
+                    text.setAttribute('font-weight', 'bold');
+                    text.setAttribute('fill', prize.id <= 3 ? '#2A2E3B' : 'white');
+                    text.textContent = prize.name;
+                    wheelSvg.appendChild(text);
+                });
+
+                wheelSvg.style.transform = `rotate(${currentRotation}deg)`;
+            }
+
+            // ===================== 概率面板（管理员可配置） =====================
+            function initProbControls() {
+                probControls.innerHTML = '';
+                const sortedPrizes = [...PRIZE_CONFIG].sort((a, b) => a.id - b.id);
+                
+                sortedPrizes.forEach(prize => {
+                    const controlItem = document.createElement('div');
+                    controlItem.className = 'space-y-1';
+                    
+                    const label = document.createElement('label');
+                    label.className = 'block text-xs font-medium text-gray-700 flex justify-between';
+                    label.innerHTML = `
+                        <span>${prize.name}</span>
+                        <span id="prob-${prize.id}" class="font-bold text-prize1">${prize.probability}%</span>
+                    `;
+                    
+                    const slider = document.createElement('input');
+                    slider.type = 'range';
+                    slider.min = 0;
+                    slider.max = 100;
+                    slider.value = prize.probability;
+                    slider.className = 'w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer';
+                    slider.style.background = `linear-gradient(to right, ${prize.color} 0%, ${prize.color} ${prize.probability}%, #e5e7eb ${prize.probability}%, #e5e7eb 100%)`;
+                    
+                    // 已抽奖则禁用滑块
+                    slider.addEventListener('input', (e) => {
+                        if (isSpinning || hasDrawn) return;
+                        const value = parseInt(e.target.value);
+                        document.getElementById(`prob-${prize.id}`).textContent = `${value}%`;
+                        e.target.style.background = `linear-gradient(to right, ${prize.color} 0%, ${prize.color} ${value}%, #e5e7eb ${value}%, #e5e7eb 100%)`;
+                        const targetPrize = PRIZE_CONFIG.find(p => p.id === prize.id);
+                        if (targetPrize) targetPrize.probability = value;
+                        updateTotalProbability();
+                    });
+                    
+                    controlItem.appendChild(label);
+                    controlItem.appendChild(slider);
+                    probControls.appendChild(controlItem);
+                });
+
+                updateTotalProbability();
+            }
+
+            function updateTotalProbability() {
+                const total = PRIZE_CONFIG.reduce((sum, prize) => sum + prize.probability, 0);
+                totalProbEl.textContent = `${total}%`;
+                totalProbEl.className = total === 100 ? 'font-bold text-prize1' : 'font-bold text-yellow-600';
+            }
+
+            // ===================== 抽奖核心逻辑 =====================
+            function selectPrizeByProb() {
+                const total = PRIZE_CONFIG.reduce((sum, prize) => sum + prize.probability, 0);
+                if (total <= 0) return PRIZE_CONFIG[0];
+                
+                const random = Math.random() * total;
+                let cumulative = 0;
+                for (const prize of PRIZE_CONFIG) {
+                    cumulative += prize.probability;
+                    if (random < cumulative) return prize;
+                }
+                return PRIZE_CONFIG[PRIZE_CONFIG.length - 1];
+            }
+
+            function getPrizeByRotation(rotation) {
+                const normRotation = rotation % 360;
+                const sectorIndex = Math.floor((360 - normRotation) / SLICE_ANGLE) % PRIZE_CONFIG.length;
+                return PRIZE_CONFIG[sectorIndex];
+            }
+
+            function spinWheel() {
+                // 校验1：旋转中
+                if (isSpinning) return;
+                // 校验2：已抽奖
+                if (hasDrawn) {
+                    disableSpinButton('您已完成抽奖，每人仅限1次！');
+                    return;
+                }
+                // 校验3：总概率100%
+                const totalProb = PRIZE_CONFIG.reduce((sum, prize) => sum + prize.probability, 0);
+                if (totalProb !== 100) {
+                    showResult('概率配置错误，请联系管理员！', 'text-red-500');
+                    return;
+                }
+
+                // 锁定状态
+                isSpinning = true;
+                spinBtn.disabled = true;
+                spinBtn.textContent = '抽奖中...';
+                spinBtn.classList.add('opacity-70');
+                showResult('正在抽奖，请稍候...', 'text-gray-500');
+
+                // 概率选奖 + 计算旋转角度
+                const targetPrize = selectPrizeByProb();
+                const targetIndex = PRIZE_CONFIG.findIndex(p => p.id === targetPrize.id);
+                const targetAngle = targetIndex * SLICE_ANGLE + SLICE_ANGLE / 2; // 指向扇区中心
+                const finalRotation = currentRotation + 15 * 360 + (360 - targetAngle);
+
+                // 执行旋转（微信浏览器适配）
+                wheelSvg.classList.remove('wheel-spin');
+                wheelSvg.style.transform = `rotate(${currentRotation}deg)`;
+                void wheelSvg.offsetWidth; // 强制重绘
+                wheelSvg.classList.add('wheel-spin');
+                wheelSvg.style.transform = `rotate(${finalRotation}deg)`;
+
+                // 旋转结束
+                setTimeout(() => {
+                    currentRotation = finalRotation % 360;
+                    const actualPrize = getPrizeByRotation(finalRotation);
+                    
+                    // 标记抽奖完成（永久限制）
+                    markDrawCompleted();
+                    
+                    // 禁用按钮 + 显示结果
+                    isSpinning = false;
+                    disableSpinButton(`🎉 恭喜您获得<span class="text-prize1 font-bold mx-1">${actualPrize.name}</span>！`);
+                    
+                    // 结果动画
+                    resultArea.classList.add('animate-pulse');
+                    setTimeout(() => resultArea.classList.remove('animate-pulse'), 1000);
+                }, SPIN_DURATION);
+            }
+
+            function showResult(html, className) {
+                resultArea.innerHTML = `<span class="${className}">${html}</span>`;
+            }
+
+            // ===================== 初始化 =====================
+            // 1. 检查抽奖状态，已抽则禁用按钮
+            if (hasDrawn) {
+                disableSpinButton('您已完成抽奖，每人仅限1次！');
+            }
+            // 2. 渲染转盘
+            renderWheel();
+            // 3. 初始化概率面板（管理员可调整）
+            initProbControls();
+            // 4. 绑定抽奖事件
+            spinBtn.addEventListener('click', spinWheel);
+
+            // 微信适配：窗口变化重绘
+            window.addEventListener('resize', () => {
+                if (!isSpinning && !hasDrawn) renderWheel();
+            });
+        });
+    </script>
+</body>
+</html>
